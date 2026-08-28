@@ -1,0 +1,462 @@
+# =========================================================
+#             AUCTION HOUSE SKRIPT
+#         CREATED BY ELYTHER 
+# =========================================================
+
+command /ahclear:
+    permission: op
+    permission message: &cYou don't have permission to use this command!
+    trigger:
+        delete {AuctionHouse::items::*}
+        delete {AuctionHouse::owner::*}
+        delete {AuctionHouse::price::*}
+        message "&aAuction house data has been completely wiped." to player
+
+command /ahcheck:
+    permission: op
+    permission message: &cYou don't have permission to use this command!
+    trigger:
+        loop {AuctionHouse::items::*}:
+            set {_formattedPrice} to formatPrice({AuctionHouse::price::%loop-index%})
+            message "%loop-index%: %{AuctionHouse::items::%loop-index%}% (&e$%{_formattedPrice}%&r) - %{AuctionHouse::owner::%loop-index%}%" to player
+
+command /ahconfirm [<text>]:
+    trigger:
+        if arg 1 is "off":
+            set {AH_Settings::Confirm::%player%} to false
+            message "&c[Auction House] Purchase confirmation disabled." to player
+        else if arg 1 is "on":
+            delete {AH_Settings::Confirm::%player%}
+            message "&a[Auction House] Purchase confirmation enabled." to player
+
+command /ah [<text>] [<text>]:
+    trigger:
+        delete {ah_search_prompt::%player%}
+        delete {%player%_ah_search}
+
+        if arg 1 is "sell":
+            if arg 2 is not set:
+                message "&cUsage: /ah sell <price> &7(e.g., 500, 10k, 2.5m, 1b)" to player
+                stop
+
+            set {_price} to parsePrice(arg 2)
+
+            if {_price} <= 0:
+                message "&cYou must enter a valid price! &7(e.g., 100, 50k, 2m, 1b)" to player
+                stop
+
+            if player's held item is air:
+                message "&cYou must hold an item in your hand!" to player
+                stop
+
+            set {_count} to 0
+            loop {AuctionHouse::owner::*}:
+                if loop-value is player:
+                    add 1 to {_count}
+
+            if {_count} >= 45:
+                message "&cYou have too many listings! &e(Maximum 45)" to player
+                stop
+
+            set {_size} to size of {AuctionHouse::items::*}
+            set {AuctionHouse::items::%{_size}%} to player's held item
+            set {AuctionHouse::owner::%{_size}%} to player
+            set {AuctionHouse::price::%{_size}%} to {_price}
+            
+            set player's held item to air
+            set {_formattedPrice} to formatPrice({_price})
+            message "&6Item added to the auction house. Price: &e$%{_formattedPrice}%" to player
+            refreshListings()
+
+        else if arg 1 is not set:
+            set {%player%_ah_page} to 0
+            displayAH(0, player)
+            
+        else:
+            message "&cInvalid command! Usage: &e/ah &cor &e/ah sell <price>" to player
+
+command /ahserverlist [<text>]:
+    permission: op
+    trigger:
+        if arg 1 is not set:
+            message "&cUsage: /ahserverlist <price>" to player
+            stop
+        set {_price} to parsePrice(arg 1)
+        if {_price} <= 0:
+            message "&cPlease enter a valid price!" to player
+            stop
+        if player's held item is not air:
+            set {_size} to size of {AuctionHouse::items::*}
+            set {AuctionHouse::items::%{_size}%} to player's held item
+            set {AuctionHouse::owner::%{_size}%} to "Server"
+            set {AuctionHouse::price::%{_size}%} to {_price}
+            
+            set player's held item to air
+            message "&6Item added as a server listing." to player
+            refreshListings()
+        else:
+            message "&cYou must hold an item in your hand!" to player
+
+on chat:
+    if {ah_search_prompt::%player%} is true:
+        cancel event
+        delete {ah_search_prompt::%player%}
+        if message is "cancel":
+            message "&cSearch cancelled." to player
+            displayAH({%player%_ah_page}, player)
+        else:
+            set {%player%_ah_search} to message
+            set {%player%_ah_page} to 0
+            message "&aShowing search results for: &e%message%" to player
+            displayAH(0, player)
+
+on inventory close:
+    delete {%player%_viewingAH}
+    delete {%player%_viewingListings}
+
+on inventory click:
+    if name of event-inventory is "&5Auction House":
+        cancel event
+        if event-slot is not air:
+            if line 5 of lore of event-slot is set:
+                set {_line} to uncolored line 5 of lore of event-slot
+                if {_line} contains "Listing #":
+                    replace all "Listing #" in {_line} with ""
+                    set {_listing} to {_line} parsed as integer
+
+                    if {AuctionHouse::owner::%{_listing}%} is not player:
+                        if player's balance >= {AuctionHouse::price::%{_listing}%}:
+                            if {AH_Settings::Confirm::%player%} is false:
+                                directPurchase({_listing}, player, {%player%_ah_page})
+                            else:
+                                displayPurchase({_listing}, player)
+                        else:
+                            message "&cYou don't have enough money to buy this item!" to player
+                    else:
+                        message "&cYou cannot buy your own listing!" to player
+            
+            if event-slot is paper named "&2Next Page":
+                add 1 to {%player%_ah_page}
+                displayAH({%player%_ah_page}, player)
+            else if event-slot is paper named "&4Previous Page":
+                subtract 1 from {%player%_ah_page}
+                displayAH({%player%_ah_page}, player)
+            else if event-slot is sunflower named "&6My Listings":
+                displayMyListings(player)
+            else if event-slot is clock named "&aRefresh Page":
+                displayAH({%player%_ah_page}, player)
+            else if event-slot is hopper named "&bSort":
+                if {%player%_ah_sort} is not set:
+                    set {%player%_ah_sort} to 2
+                else:
+                    add 1 to {%player%_ah_sort}
+                    if {%player%_ah_sort} > 4:
+                        set {%player%_ah_sort} to 1
+                set {%player%_ah_page} to 0
+                displayAH(0, player)
+            else if event-slot is oak sign named "&aSearch Item":
+                close player's inventory
+                set {ah_search_prompt::%player%} to true
+                message "&eType the name of the item you want to search in chat. &7Type &c'cancel' &7to cancel." to player
+            else if event-slot is barrier named "&cClear Search":
+                delete {%player%_ah_search}
+                set {%player%_ah_page} to 0
+                displayAH(0, player)
+
+    else if name of event-inventory is "&6Purchase - &eAre you sure?":
+        cancel event
+        set {_line} to uncolored line 5 of lore of slot 4 of open inventory
+        replace all "Listing #" in {_line} with ""
+        set {_listing} to {_line} parsed as integer
+
+        if event-slot is green stained glass pane:
+            directPurchase({_listing}, player, {%player%_ah_page})
+        else if event-slot is red stained glass pane:
+            displayAH({%player%_ah_page}, player)
+
+    else if name of event-inventory is "&6My Listings":
+        cancel event
+        if line 5 of lore of event-slot is set:
+            set {_line} to uncolored line 5 of lore of event-slot
+            if {_line} contains "Listing #":
+                replace all "Listing #" in {_line} with ""
+                set {_listing} to {_line} parsed as integer
+
+                if player has enough space for {AuctionHouse::items::%{_listing}%}:
+                    give {AuctionHouse::items::%{_listing}%} to player
+                    message "&eListing removed and item returned." to player
+
+                    delete {AuctionHouse::items::%{_listing}%}
+                    delete {AuctionHouse::owner::%{_listing}%}
+                    delete {AuctionHouse::price::%{_listing}%}
+                    fixListings()
+                    displayAH({%player%_ah_page}, player)
+                    refreshListings()
+                else:
+                    message "&cYou don't have enough space in your inventory!" to player
+        else if event-slot is red wool block named "&4Back":
+            displayAH({%player%_ah_page}, player)
+
+function directPurchase(listing: integer, p: player, page: integer):
+    if {AuctionHouse::items::%{_listing}%} is set:
+        if {_p} has enough space for {AuctionHouse::items::%{_listing}%}:
+            set {_price} to {AuctionHouse::price::%{_listing}%}
+            set {_seller} to {AuctionHouse::owner::%{_listing}%}
+            set {_formattedPrice} to formatPrice({_price})
+
+            remove {_price} from {_p}'s balance
+            give {AuctionHouse::items::%{_listing}%} to {_p}
+            message "&eItem successfully purchased!" to {_p}
+            
+            if {_seller} is not "Server":
+                add {_price} to {_seller}'s balance
+                if {_seller} is online:
+                    message "&2Your listed &e%{AuctionHouse::items::%{_listing}%}% &2was sold for &e$%{_formattedPrice}%&2!" to {_seller}
+
+            delete {AuctionHouse::items::%{_listing}%}
+            delete {AuctionHouse::owner::%{_listing}%}
+            delete {AuctionHouse::price::%{_listing}%}
+            fixListings()
+            displayAH({_page}, {_p})
+            refreshListings()
+        else:
+            message "&cYou don't have enough space in your inventory!" to {_p}
+    else:
+        displayAH({_page}, {_p})
+        message "&cListing is no longer available or has been sold." to {_p}
+
+function parsePrice(t: text) :: number:
+    set {_s} to uncolored {_t}
+    replace all "," in {_s} with "."
+    set {_len} to length of {_s}
+    if {_len} <= 0:
+        return -1
+    set {_last} to subtext of {_s} from character {_len} to {_len}
+
+    if {_last} is "k" or "K":
+        set {_numPart} to subtext of {_s} from character 1 to ({_len} - 1)
+        set {_num} to {_numPart} parsed as number
+        if {_num} is set:
+            return {_num} * 1000
+    else if {_last} is "m" or "M":
+        set {_numPart} to subtext of {_s} from character 1 to ({_len} - 1)
+        set {_num} to {_numPart} parsed as number
+        if {_num} is set:
+            return {_num} * 1000000
+    else if {_last} is "b" or "B":
+        set {_numPart} to subtext of {_s} from character 1 to ({_len} - 1)
+        set {_num} to {_numPart} parsed as number
+        if {_num} is set:
+            return {_num} * 1000000000
+    else:
+        set {_num} to {_s} parsed as number
+        if {_num} is set:
+            return {_num}
+    return -1
+
+function formatPrice(n: number) :: text:
+    if {_n} >= 1000000000:
+        set {_val} to {_n} / 1000000000
+        return "%{_val}%B"
+    else if {_n} >= 1000000:
+        set {_val} to {_n} / 1000000
+        return "%{_val}%M"
+    else if {_n} >= 1000:
+        set {_val} to {_n} / 1000
+        return "%{_val}%K"
+    return "%{_n}%"
+
+function displayAH(page: integer, p: player):
+    show chest inventory with 6 rows named "&5Auction House" to {_p}
+    set {%{_p}%_viewingAH} to true
+
+    delete {_matches::*}
+    loop {AuctionHouse::items::*}:
+        if {%{_p}%_ah_search} is set:
+            set {_search} to {%{_p}%_ah_search}
+            set {_name} to "%name of loop-value%"
+            if {_name} is "<none>":
+                set {_name} to ""
+            set {_type} to "%type of loop-value%"
+
+            if {_name} contains {_search}:
+                add loop-index to {_matches::*}
+            else if {_type} contains {_search}:
+                add loop-index to {_matches::*}
+        else:
+            add loop-index to {_matches::*}
+
+    set {_sortType} to {%{_p}%_ah_sort}
+    if {_sortType} is not set:
+        set {_sortType} to 1 
+
+    delete {_sorted::*}
+    
+    if {_sortType} is 1:
+        loop {_matches::*}:
+            add loop-value to {_sorted::*}
+            
+    else if {_sortType} is 2:
+        set {_size} to size of {_matches::*}
+        loop {_size} times:
+            add {_matches::%{_size} - loop-number + 1%} to {_sorted::*}
+            
+    else if {_sortType} is 3 or 4:
+        delete {_priceMap::*}
+        loop {_matches::*}:
+            set {_idx} to loop-value
+            set {_pr} to {AuctionHouse::price::%{_idx}%}
+            
+            set {_sortPr} to round({_pr} * 100)
+            set {_strPr} to "%{_sortPr}%"
+            set {_len} to length of {_strPr}
+            set {_pad} to ""
+            set {_loopCount} to 20 - {_len}
+            loop {_loopCount} times:
+                set {_pad} to "%{_pad}%0"
+            
+            set {_sortKey} to "%{_pad}%%{_strPr}%-%{_idx}%"
+            set {_priceMap::%{_sortKey}%} to {_idx}
+            
+        delete {_tempList::*}
+        loop {_priceMap::*}:
+            add loop-value to {_tempList::*}
+            
+        if {_sortType} is 3:
+            loop {_tempList::*}:
+                add loop-value to {_sorted::*}
+        else if {_sortType} is 4:
+            set {_size} to size of {_tempList::*}
+            loop {_size} times:
+                add {_tempList::%{_size} - loop-number + 1%} to {_sorted::*}
+
+    set {_start} to ({_page} * 45) + 1
+    set {_end} to {_start} + 44
+    set {_slot} to 0
+    set {_count} to 0
+
+    loop {_sorted::*}:
+        add 1 to {_count}
+        if {_count} >= {_start}:
+            if {_count} <= {_end}:
+                set {_index} to loop-value
+                set {_displayItem} to {AuctionHouse::items::%{_index}%}
+                set {_formattedPrice} to formatPrice({AuctionHouse::price::%{_index}%})
+                add "&8--------------------" to lore of {_displayItem}
+                add "&eSeller: &a%{AuctionHouse::owner::%{_index}%}%" to lore of {_displayItem}
+                add "&ePrice: &a$%{_formattedPrice}%" to lore of {_displayItem}
+                add "&8--------------------" to lore of {_displayItem}
+                add "&8Listing #%{_index}%" to lore of {_displayItem}
+                
+                set slot {_slot} of {_p}'s open inventory to {_displayItem}
+                add 1 to {_slot}
+
+    if {_page} > 0:
+        set slot 45 of {_p}'s open inventory to paper named "&4Previous Page"
+    else:
+        set slot 45 of {_p}'s open inventory to bedrock named " "
+
+    set slot 46 of {_p}'s open inventory to bedrock named " "
+    set slot 47 of {_p}'s open inventory to bedrock named " "
+
+    if {%{_p}%_ah_search} is set:
+        set slot 48 of {_p}'s open inventory to barrier named "&cClear Search" with lore "&7Active Search: &e%{%{_p}%_ah_search}%"
+    else:
+        set slot 48 of {_p}'s open inventory to oak sign named "&aSearch Item" with lore "&7Click to search for items in the market."
+
+    set slot 49 of {_p}'s open inventory to sunflower named "&6My Listings" with lore "&7Click to view your listed items."
+
+    set {_s1} to "&7Oldest to Newest"
+    set {_s2} to "&7Newest to Oldest"
+    set {_s3} to "&7Lowest Price"
+    set {_s4} to "&7Highest Price"
+    if {_sortType} is 1:
+        set {_s1} to "&a▶ Oldest to Newest"
+    else if {_sortType} is 2:
+        set {_s2} to "&a▶ Newest to Oldest"
+    else if {_sortType} is 3:
+        set {_s3} to "&a▶ Lowest Price"
+    else if {_sortType} is 4:
+        set {_s4} to "&a▶ Highest Price"
+
+    set slot 50 of {_p}'s open inventory to hopper named "&bSort" with lore "", {_s1}, {_s2}, {_s3}, {_s4}
+
+    set slot 51 of {_p}'s open inventory to clock named "&aRefresh Page" with lore "&7Click to refresh current listings."
+    
+    set slot 52 of {_p}'s open inventory to bedrock named " "
+
+    if size of {_matches::*} > {_end}:
+        set slot 53 of {_p}'s open inventory to paper named "&2Next Page"
+    else:
+        set slot 53 of {_p}'s open inventory to bedrock named " "
+
+function displayPurchase(listing: object, p: player):
+    set {_displayItem} to {AuctionHouse::items::%{_listing}%}
+    set {_formattedPrice} to formatPrice({AuctionHouse::price::%{_listing}%})
+    add "&8--------------------" to lore of {_displayItem}
+    add "&eSeller: &a%{AuctionHouse::owner::%{_listing}%}%" to lore of {_displayItem}
+    add "&ePrice: &a$%{_formattedPrice}%" to lore of {_displayItem}
+    add "&8--------------------" to lore of {_displayItem}
+    add "&8Listing #%{_listing}%" to lore of {_displayItem}
+
+    show chest inventory with 1 row named "&6Purchase - &eAre you sure?" to {_p}
+    set slot 0 of {_p}'s open inventory to green stained glass pane named "&2Confirm"
+    set slot 1 of {_p}'s open inventory to green stained glass pane named "&2Confirm"
+    set slot 2 of {_p}'s open inventory to green stained glass pane named "&2Confirm"
+    set slot 3 of {_p}'s open inventory to green stained glass pane named "&2Confirm"
+    set slot 4 of {_p}'s open inventory to {_displayItem}
+    set slot 5 of {_p}'s open inventory to red stained glass pane named "&4Cancel"
+    set slot 6 of {_p}'s open inventory to red stained glass pane named "&4Cancel"
+    set slot 7 of {_p}'s open inventory to red stained glass pane named "&4Cancel"
+    set slot 8 of {_p}'s open inventory to red stained glass pane named "&4Cancel"
+
+function fixListings():
+    set {_tempItems::*} to {AuctionHouse::items::*}
+    set {_tempOwners::*} to {AuctionHouse::owner::*}
+    set {_tempPrices::*} to {AuctionHouse::price::*}
+
+    delete {AuctionHouse::items::*}
+    delete {AuctionHouse::owner::*}
+    delete {AuctionHouse::price::*}
+
+    set {_idx} to 0
+    loop {_tempItems::*}:
+        set {AuctionHouse::items::%{_idx}%} to loop-value
+        add 1 to {_idx}
+
+    set {_idx} to 0
+    loop {_tempOwners::*}:
+        set {AuctionHouse::owner::%{_idx}%} to loop-value
+        add 1 to {_idx}
+
+    set {_idx} to 0
+    loop {_tempPrices::*}:
+        set {AuctionHouse::price::%{_idx}%} to loop-value
+        add 1 to {_idx}
+
+function displayMyListings(p: player):
+    show chest inventory with 6 rows named "&6My Listings" to {_p}
+    set {%{_p}%_viewingListings} to true
+    set {_slot} to 0
+
+    loop {AuctionHouse::owner::*}:
+        if loop-value is {_p}:
+            set {_displayItem} to {AuctionHouse::items::%loop-index%}
+            set {_formattedPrice} to formatPrice({AuctionHouse::price::%loop-index%})
+            add "&8--------------------" to lore of {_displayItem}
+            add "&eSeller: &a%{AuctionHouse::owner::%loop-index%}%" to lore of {_displayItem}
+            add "&ePrice: &a$%{_formattedPrice}%" to lore of {_displayItem}
+            add "&8--------------------" to lore of {_displayItem}
+            add "&8Listing #%loop-index%" to lore of {_displayItem}
+            add "&cClick to remove" to lore of {_displayItem}
+            set slot {_slot} of {_p}'s open inventory to {_displayItem}
+            add 1 to {_slot}
+            
+    set slot 53 of {_p}'s open inventory to red wool block named "&4Back"
+
+function refreshListings():
+    loop all players:
+        if {%loop-player%_viewingAH} is true:
+            displayAH({%loop-player%_ah_page}, loop-player)
+        else if {%loop-player%_viewingListings} is true:
+            displayMyListings(loop-player)
